@@ -1,17 +1,111 @@
-# terraform-project
+provider "aws" {
+  region = "us-east-1"
+}
 
-#### Understanding Provisioners in Terraform
+variable "cidr" {
+  default = "10.0.0.0/16"
+}
 
-Learn about provisioners, mechanisms for executing actions on resources during creation and destruction. Understand how they facilitate customization.
+resource "aws_key_pair" "mykeypair" {
+  key_name = "terraform-demo-bharathi"
+  public_key = file("~/.ssh/id_rsa.pub")
+}
 
-#### Remote-exec and Local-exec Provisioners
+resource "aws_vpc" "myvpc" {
+  cidr_block = var.cidr
+}
 
-Differentiate between remote-exec and local-exec provisioners. Explore how remote-exec provisions actions on remote servers, while local-exec performs tasks locally.
+resource "aws_subnet" "sub1" {
+  vpc_id     = aws_vpc.myvpc.id
+  cidr_block = "10.0.1.0/24"
+  availability_zone = "us-east-1a"
+  map_public_ip_on_launch = true
+  
+tags = {
+    Name = "sub1"
+  }
+}
 
-#### Applying Provisioners at Creation and Destruction 
+resource "aws_internet_gateway" "gw" {
+  vpc_id = aws_vpc.myvpc.id
+}
 
-Discover when to use provisioners during resource creation or destruction. Configure provisioners within resource blocks to execute specific actions.
+resource "aws_route_table" "RT" {
+  vpc_id = aws_vpc.myvpc.id
 
-#### Failure Handling for Provisioners
+  route {
+    cidr_block = "0.0.0.0/0"
+    gateway_id = aws_internet_gateway.gw.id
+  }
+}
 
-Gain insights into handling provisioner failures. Learn about retry mechanisms, timeouts, and the on_failure attribute to control provisioner behavior on failure.
+resource "aws_route_table_association" "rta" {
+  subnet_id      = aws_subnet.sub1.id
+  route_table_id = aws_route_table.RT.id
+}
+
+resource "aws_security_group" "mysg"{
+  description = "web"
+  vpc_id      = aws_vpc.myvpc.id 
+
+ ingress {
+    description = "HTTP from VPC"
+    from_port   = 80
+    to_port     = 80
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+  ingress {
+    description = "SSH"
+    from_port   = 22
+    to_port     = 22
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+   egress {
+    from_port        = 0
+    to_port          = 0
+    protocol         = "-1"
+    cidr_blocks      = ["0.0.0.0/0"]
+   }
+
+  tags = {
+    name = "web-sg"
+  }
+}
+
+resource "aws_instance" "myec2" {
+  ami = "ami-0261755bbcb8c4a84"
+  instance_type = "t2.micro"
+  key_name = aws_key_pair.mykeypair.key_name
+  vpc_security_group_ids = [aws_security_group.mysg.id]
+  subnet_id = aws_subnet.sub1.id
+  
+  
+tags = {
+    Name = "MyEC2Instance"
+  }
+
+  connection {
+    type = "ssh"
+    user = "ubuntu"
+    private_key = file("~/.ssh/id_rsa")
+    host = self.public_ip
+  }
+
+  provisioner "file" {
+    source = "app.py"
+    destination = "/home/ubuntu/app.py"
+  }
+
+  provisioner "remote-exec"{
+    inline = [
+      "echo 'Hello from the remote instance'",
+      "sudo apt update -y",
+      "sudo apt-get install -y python3-pip",
+      "cd /home/ubuntu",
+      "sudo pip3 install flask",
+      "sudo python3 app.py &",
+    ]
+  }
+}
